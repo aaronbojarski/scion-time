@@ -250,6 +250,7 @@ func runServer(configFile, daemonAddr string, localAddr *snet.UDPAddr) {
 		go sync.RunGlobalClockSync(log, lclk)
 	}
 
+	server.StartNTSKEServer(ctx, log, snet.CopyUDPAddr(localAddr.Host))
 	server.StartIPServer(ctx, log, snet.CopyUDPAddr(localAddr.Host))
 	server.StartSCIONServer(ctx, log, daemonAddr, snet.CopyUDPAddr(localAddr.Host))
 
@@ -330,6 +331,7 @@ func runIPTool(localAddr, remoteAddr *snet.UDPAddr, authMode string, NTSKEServer
 		tlsconfig := &tls.Config{}
 		tlsconfig.InsecureSkipVerify = skipTLSValidation
 		tlsconfig.ServerName = NTSKEServerAddr
+		tlsconfig.MinVersion = tls.VersionTLS13
 		c.NTSKEFetcher.TLSConfig = *tlsconfig
 		c.NTSKEFetcher.Log = log
 	} else {
