@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/tls"
+	"encoding/binary"
 	"encoding/gob"
 	"net"
 	"os"
@@ -49,24 +50,33 @@ func (c PlainCookie) Encrypt(key []byte, keyid int) (EncryptedCookie, error) {
 		return ecookie, err
 	}
 
-	buf, err := c.Pack()
+	b, err := c.Pack()
 	if err != nil {
 		return ecookie, err
 	}
 
-	ecookie.Ciphertext = aessiv.Seal(nil, ecookie.Nonce, buf.Bytes(), nil)
+	ecookie.Ciphertext = aessiv.Seal(nil, ecookie.Nonce, b, nil)
 
 	return ecookie, nil
 }
 
-func (c PlainCookie) Pack() (buf *bytes.Buffer, err error) {
+func (c PlainCookie) Pack() (b []byte, err error) {
 	// suggested format
 	// uint16 | uint16 | []byte
 	// type   | length | value
-	// var cookiesize int = 3*4 + 2 + len(c.C2S) + len(c.S2C)
-	// b := make([]byte, cookiesize)
-	
-	return pack(c)
+	var cookiesize int = 3*4 + 2 + len(c.C2S) + len(c.S2C)
+	b = make([]byte, cookiesize)
+	binary.BigEndian.PutUint16((b)[0:], 0x101)
+	binary.BigEndian.PutUint16((b)[2:], 0x2)
+	binary.BigEndian.PutUint16((b)[4:], c.Algo)
+	binary.BigEndian.PutUint16((b)[6:], 0x201)
+	binary.BigEndian.PutUint16((b)[8:], uint16(len(c.S2C)))
+	copy((b)[10:], c.S2C)
+	pos := len(c.S2C) + 10
+	binary.BigEndian.PutUint16((b)[pos:], 0x301)
+	binary.BigEndian.PutUint16((b)[pos+2:], uint16(len(c.C2S)))
+	copy((b)[pos+4:], c.C2S)
+	return b, nil
 }
 
 type EncryptedCookie struct {
@@ -75,8 +85,20 @@ type EncryptedCookie struct {
 	Ciphertext []byte
 }
 
-func (c EncryptedCookie) Pack() (buf *bytes.Buffer, err error) {
-	return pack(c)
+func (c EncryptedCookie) Pack() (b []byte, err error) {
+	var encryptedcookiesize int = 3*4 + 2 + len(c.Nonce) + len(c.Ciphertext)
+	b = make([]byte, encryptedcookiesize)
+	binary.BigEndian.PutUint16((b)[0:], 0x401)
+	binary.BigEndian.PutUint16((b)[2:], 0x2)
+	binary.BigEndian.PutUint16((b)[4:], c.ID)
+	binary.BigEndian.PutUint16((b)[6:], 0x501)
+	binary.BigEndian.PutUint16((b)[8:], uint16(len(c.Nonce)))
+	copy((b)[10:], c.Nonce)
+	pos := len(c.Nonce) + 10
+	binary.BigEndian.PutUint16((b)[pos:], 0x601)
+	binary.BigEndian.PutUint16((b)[pos+2:], uint16(len(c.Ciphertext)))
+	copy((b)[pos+4:], c.Ciphertext)
+	return b, nil
 }
 
 func runNTSKEServer(log *zap.Logger, listener net.Listener) {
@@ -139,13 +161,13 @@ func runNTSKEServer(log *zap.Logger, listener net.Listener) {
 				os.Exit(1)
 			}
 
-			buf, err := ecookie.Pack()
+			b, err := ecookie.Pack()
 			if err != nil {
 				os.Exit(1)
 			}
 
 			var cookie ntske.Cookie
-			cookie.Cookie = buf.Bytes()
+			cookie.Cookie = b
 
 			msg.AddRecord(cookie)
 		}
