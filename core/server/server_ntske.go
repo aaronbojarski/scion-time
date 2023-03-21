@@ -60,6 +60,12 @@ func (c PlainCookie) Encrypt(key []byte, keyid int) (EncryptedCookie, error) {
 }
 
 func (c PlainCookie) Pack() (buf *bytes.Buffer, err error) {
+	// suggested format
+	// uint16 | uint16 | []byte
+	// type   | length | value
+	// var cookiesize int = 3*4 + 2 + len(c.C2S) + len(c.S2C)
+	// b := make([]byte, cookiesize)
+	
 	return pack(c)
 }
 
