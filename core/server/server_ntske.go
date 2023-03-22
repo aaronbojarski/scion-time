@@ -50,7 +50,7 @@ func (c PlainCookie) Encrypt(key []byte, keyid int) (EncryptedCookie, error) {
 		return ecookie, err
 	}
 
-	b, err := c.Pack()
+	b, err := c.Encode()
 	if err != nil {
 		return ecookie, err
 	}
@@ -60,7 +60,7 @@ func (c PlainCookie) Encrypt(key []byte, keyid int) (EncryptedCookie, error) {
 	return ecookie, nil
 }
 
-func (c PlainCookie) Pack() (b []byte, err error) {
+func (c PlainCookie) Encode() (b []byte, err error) {
 	// suggested format
 	// uint16 | uint16 | []byte
 	// type   | length | value
@@ -79,13 +79,29 @@ func (c PlainCookie) Pack() (b []byte, err error) {
 	return b, nil
 }
 
+func (c PlainCookie) Decode(b []byte) {
+	var pos int = 0
+	for pos < len(b) {
+		var t uint16 = binary.BigEndian.Uint16(b[pos:])
+		var len uint16 = binary.BigEndian.Uint16(b[pos+2:])
+		if t == 0x101 {
+			c.Algo = binary.BigEndian.Uint16(b[pos+4:])
+		} else if t == 0x201 {
+			c.S2C = b[pos+4 : pos+4+int(len)]
+		} else if t == 0x301 {
+			c.C2S = b[pos+4 : pos+4+int(len)]
+		}
+		pos += 4 + int(len)
+	}
+}
+
 type EncryptedCookie struct {
 	ID         uint16
 	Nonce      []byte
 	Ciphertext []byte
 }
 
-func (c EncryptedCookie) Pack() (b []byte, err error) {
+func (c EncryptedCookie) Endcode() (b []byte, err error) {
 	var encryptedcookiesize int = 3*4 + 2 + len(c.Nonce) + len(c.Ciphertext)
 	b = make([]byte, encryptedcookiesize)
 	binary.BigEndian.PutUint16((b)[0:], 0x401)
@@ -99,6 +115,22 @@ func (c EncryptedCookie) Pack() (b []byte, err error) {
 	binary.BigEndian.PutUint16((b)[pos+2:], uint16(len(c.Ciphertext)))
 	copy((b)[pos+4:], c.Ciphertext)
 	return b, nil
+}
+
+func (c EncryptedCookie) Decode(b []byte) {
+	var pos int = 0
+	for pos < len(b) {
+		var t uint16 = binary.BigEndian.Uint16(b[pos:])
+		var len uint16 = binary.BigEndian.Uint16(b[pos+2:])
+		if t == 0x401 {
+			c.ID = binary.BigEndian.Uint16(b[pos+4:])
+		} else if t == 0x501 {
+			c.Nonce = b[pos+4 : pos+4+int(len)]
+		} else if t == 0x601 {
+			c.Ciphertext = b[pos+4 : pos+4+int(len)]
+		}
+		pos += 4 + int(len)
+	}
 }
 
 func runNTSKEServer(log *zap.Logger, listener net.Listener) {
@@ -161,7 +193,7 @@ func runNTSKEServer(log *zap.Logger, listener net.Listener) {
 				os.Exit(1)
 			}
 
-			b, err := ecookie.Pack()
+			b, err := ecookie.Endcode()
 			if err != nil {
 				os.Exit(1)
 			}
