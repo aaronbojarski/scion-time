@@ -7,6 +7,7 @@ import (
 	"crypto/tls"
 	"encoding/binary"
 	"encoding/gob"
+	"errors"
 	"net"
 	"os"
 
@@ -34,7 +35,7 @@ func pack(v interface{}) (buf *bytes.Buffer, err error) {
 	return buf, nil
 }
 
-func (c PlainCookie) Encrypt(key []byte, keyid int) (EncryptedCookie, error) {
+func (c *PlainCookie) Encrypt(key []byte, keyid int) (EncryptedCookie, error) {
 	var ecookie EncryptedCookie
 
 	ecookie.ID = uint16(keyid)
@@ -60,7 +61,30 @@ func (c PlainCookie) Encrypt(key []byte, keyid int) (EncryptedCookie, error) {
 	return ecookie, nil
 }
 
-func (c PlainCookie) Encode() (b []byte, err error) {
+func (c *EncryptedCookie) Decrypt(key []byte, keyid int) (PlainCookie, error) {
+	var cookie PlainCookie
+
+	if c.ID != uint16(keyid) {
+		return cookie, errors.New("Wrong Key ID")
+	}
+
+	aessiv, err := siv.NewCMAC(key)
+	if err != nil {
+		return cookie, err
+	}
+
+	b, err := aessiv.Open(nil, c.Nonce, c.Ciphertext, nil)
+	if err != nil {
+		return cookie, err
+	}
+	cookie.Decode(b)
+	if err != nil {
+		return cookie, err
+	}
+	return cookie, nil
+}
+
+func (c *PlainCookie) Encode() (b []byte, err error) {
 	// suggested format
 	// uint16 | uint16 | []byte
 	// type   | length | value
@@ -79,7 +103,7 @@ func (c PlainCookie) Encode() (b []byte, err error) {
 	return b, nil
 }
 
-func (c PlainCookie) Decode(b []byte) {
+func (c *PlainCookie) Decode(b []byte) {
 	var pos int = 0
 	for pos < len(b) {
 		var t uint16 = binary.BigEndian.Uint16(b[pos:])
@@ -101,7 +125,7 @@ type EncryptedCookie struct {
 	Ciphertext []byte
 }
 
-func (c EncryptedCookie) Endcode() (b []byte, err error) {
+func (c *EncryptedCookie) Encode() (b []byte, err error) {
 	var encryptedcookiesize int = 3*4 + 2 + len(c.Nonce) + len(c.Ciphertext)
 	b = make([]byte, encryptedcookiesize)
 	binary.BigEndian.PutUint16((b)[0:], 0x401)
@@ -117,7 +141,7 @@ func (c EncryptedCookie) Endcode() (b []byte, err error) {
 	return b, nil
 }
 
-func (c EncryptedCookie) Decode(b []byte) {
+func (c *EncryptedCookie) Decode(b []byte) {
 	var pos int = 0
 	for pos < len(b) {
 		var t uint16 = binary.BigEndian.Uint16(b[pos:])
@@ -186,14 +210,13 @@ func runNTSKEServer(log *zap.Logger, listener net.Listener) {
 			plaincookie.Algo = ntske.AES_SIV_CMAC_256
 			plaincookie.C2S = ke.Meta.C2sKey
 			plaincookie.S2C = ke.Meta.S2cKey
-
 			ecookie, err := plaincookie.Encrypt([]byte(cookiesecret), cookiekeyid)
 			if err != nil {
 				log.Error("Couldn't encrypt cookie", zap.Error(err))
 				os.Exit(1)
 			}
 
-			b, err := ecookie.Endcode()
+			b, err := ecookie.Encode()
 			if err != nil {
 				os.Exit(1)
 			}
