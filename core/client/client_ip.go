@@ -23,9 +23,9 @@ import (
 
 type IPClient struct {
 	InterleavedMode bool
-	NTSKEFetcher    ntske.Fetcher
 	Auth            struct {
-		Enabled bool
+		Enabled      bool
+		NTSKEFetcher ntske.Fetcher
 	}
 	prev struct {
 		reference string
@@ -85,7 +85,7 @@ func (c *IPClient) ResetInterleavedMode() {
 func (c *IPClient) measureClockOffsetIP(ctx context.Context, log *zap.Logger, mtrcs *ipClientMetrics,
 	localAddr, remoteAddr *net.UDPAddr) (
 	offset time.Duration, weight float64, err error) {
-	// set up connection
+
 	conn, err := net.ListenUDP("udp", &net.UDPAddr{IP: localAddr.IP})
 	if err != nil {
 		return offset, weight, err
@@ -103,9 +103,15 @@ func (c *IPClient) measureClockOffsetIP(ctx context.Context, log *zap.Logger, mt
 		log.Error("failed to enable timestamping", zap.Error(err))
 	}
 
+	var KEData ntske.Data
 	if c.Auth.Enabled {
-		remoteAddr.Port = c.NTSKEFetcher.GetServerPort()
-		remoteAddr.IP = net.ParseIP(c.NTSKEFetcher.GetServerIP())
+		KEData, err = c.Auth.NTSKEFetcher.FetchData()
+		if err != nil {
+			log.Error("failed to fetch key exchange data", zap.Error(err))
+			return offset, weight, err
+		}
+		remoteAddr.Port = int(KEData.Port)
+		remoteAddr.IP = net.ParseIP(KEData.Server)
 	}
 
 	buf := make([]byte, ntp.PacketLen)
@@ -129,34 +135,10 @@ func (c *IPClient) measureClockOffsetIP(ctx context.Context, log *zap.Logger, mt
 
 	ntp.EncodePacket(&buf, &ntpreq)
 
-	// add NTS extension fields to packet
-	var uniqueID []byte
-	ntsreq := nts.NTSPacket{}
-
+	var requestID []byte
+	var ntsreq nts.NTSPacket
 	if c.Auth.Enabled {
-		ntsreq.NTPHeader = buf
-		var uqext nts.UniqueIdentifier
-		uqext.Generate()
-		ntsreq.AddExt(uqext)
-
-		var c2skey []byte
-		var cookie nts.Cookie
-		cookie.Cookie, c2skey = c.NTSKEFetcher.GetCookieC2sKey()
-		ntsreq.AddExt(cookie)
-
-		// add cookie extension fields here s.t. 8 cookies are available after response
-		var cookiePlaceholderData []byte = make([]byte, len(cookie.Cookie))
-		for i := c.NTSKEFetcher.GetNumberOfCookies(); i < 7; i++ {
-			var cookiePlacholder nts.CookiePlaceholder
-			cookiePlacholder.Cookie = cookiePlaceholderData
-			ntsreq.AddExt(cookiePlacholder)
-		}
-
-		var auth nts.Authenticator
-		auth.Key = c2skey
-		ntsreq.AddExt(auth)
-
-		uniqueID = uqext.ID
+		ntsreq, requestID = nts.PrepareNewPacket(buf, KEData)
 		nts.EncodePacket(&buf, &ntsreq)
 	}
 
@@ -232,9 +214,15 @@ func (c *IPClient) measureClockOffsetIP(ctx context.Context, log *zap.Logger, mt
 
 		var ntsresp nts.NTSPacket
 		if c.Auth.Enabled {
-			err = nts.DecodePacket(&ntsresp, buf, uniqueID, &c.NTSKEFetcher)
+			cookies, responseID, err := nts.DecodePacket(&ntsresp, buf, KEData.S2cKey)
 			if err != nil {
-				log.Error("NTS decode packet", zap.Error(err))
+				log.Error("failed to authenticate packet", zap.Error(err))
+				return offset, weight, err
+			}
+
+			err = nts.ProcessResponse(c.Auth.NTSKEFetcher, cookies, requestID, responseID)
+			if err != nil {
+				log.Error("failed to process response packet", zap.Error(err))
 				return offset, weight, err
 			}
 		}

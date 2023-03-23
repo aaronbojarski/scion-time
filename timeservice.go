@@ -214,7 +214,8 @@ func loadConfig(ctx context.Context, log *zap.Logger,
 				if ok {
 					scionclk.pather = pather
 					for i := 0; i != len(scionclk.ntpcs); i++ {
-						scionclk.ntpcs[i].DRKeyFetcher = drkeyFetcher
+						scionclk.ntpcs[i].Auth.Enabled = true
+						scionclk.ntpcs[i].Auth.DRKeyFetcher = drkeyFetcher
 					}
 				}
 			}
@@ -223,7 +224,8 @@ func loadConfig(ctx context.Context, log *zap.Logger,
 				if ok {
 					scionclk.pather = pather
 					for i := 0; i != len(scionclk.ntpcs); i++ {
-						scionclk.ntpcs[i].DRKeyFetcher = drkeyFetcher
+						scionclk.ntpcs[i].Auth.Enabled = true
+						scionclk.ntpcs[i].Auth.DRKeyFetcher = drkeyFetcher
 					}
 				}
 			}
@@ -314,7 +316,7 @@ func runClient(configFile, daemonAddr string, localAddr *snet.UDPAddr) {
 	runMonitor(log)
 }
 
-func runIPTool(localAddr, remoteAddr *snet.UDPAddr, authMode string, NTSKEServerAddr string, skipTLSValidation bool) {
+func runIPTool(localAddr, remoteAddr *snet.UDPAddr, authMode string, ntskeServerName string, ntskeInsecureSkipVerify bool) {
 	var err error
 	ctx := context.Background()
 
@@ -328,12 +330,12 @@ func runIPTool(localAddr, remoteAddr *snet.UDPAddr, authMode string, NTSKEServer
 	}
 	if authMode == authModeNTS {
 		c.Auth.Enabled = true
-		tlsconfig := &tls.Config{}
-		tlsconfig.InsecureSkipVerify = skipTLSValidation
-		tlsconfig.ServerName = NTSKEServerAddr
-		tlsconfig.MinVersion = tls.VersionTLS13
-		c.NTSKEFetcher.TLSConfig = *tlsconfig
-		c.NTSKEFetcher.Log = log
+		c.Auth.NTSKEFetcher.TLSConfig = tls.Config{
+			InsecureSkipVerify: ntskeInsecureSkipVerify,
+			ServerName:         ntskeServerName,
+			MinVersion:         tls.VersionTLS13,
+		}
+		c.Auth.NTSKEFetcher.Log = log
 	} else {
 		c.Auth.Enabled = false
 	}
@@ -367,11 +369,12 @@ func runSCIONTool(daemonAddr, dispatcherMode string, localAddr, remoteAddr *snet
 
 	laddr := udp.UDPAddrFromSnet(localAddr)
 	raddr := udp.UDPAddrFromSnet(remoteAddr)
-	cs := []*client.SCIONClient{{
+	c := &client.SCIONClient{
 		InterleavedMode: true,
-		DRKeyFetcher:    scion.NewFetcher(dc),
-	}}
-	_, err = client.MeasureClockOffsetSCION(ctx, log, cs, laddr, raddr, ps)
+	}
+	c.Auth.Enabled = true
+	c.Auth.DRKeyFetcher = scion.NewFetcher(dc)
+	_, err = client.MeasureClockOffsetSCION(ctx, log, []*client.SCIONClient{c}, laddr, raddr, ps)
 	if err != nil {
 		log.Fatal("failed to measure clock offset",
 			zap.Stringer("remoteIA", raddr.IA),
@@ -452,18 +455,18 @@ func exitWithUsage() {
 
 func main() {
 	var (
-		verbose           bool
-		configFile        string
-		daemonAddr        string
-		localAddr         snet.UDPAddr
-		remoteAddr        snet.UDPAddr
-		dispatcherMode    string
-		drkeyMode         string
-		drkeyServerAddr   snet.UDPAddr
-		drkeyClientAddr   snet.UDPAddr
-		authMode          string
-		ntskeServerAddr   string
-		skipTLSValidation bool
+		verbose                 bool
+		configFile              string
+		daemonAddr              string
+		localAddr               snet.UDPAddr
+		remoteAddr              snet.UDPAddr
+		dispatcherMode          string
+		drkeyMode               string
+		drkeyServerAddr         snet.UDPAddr
+		drkeyClientAddr         snet.UDPAddr
+		authMode                string
+		ntskeServerName         string
+		ntskeInsecureSkipVerify bool
 	)
 
 	serverFlags := flag.NewFlagSet("server", flag.ExitOnError)
@@ -494,8 +497,8 @@ func main() {
 	toolFlags.Var(&localAddr, "local", "Local address")
 	toolFlags.Var(&remoteAddr, "remote", "Remote address")
 	toolFlags.StringVar(&authMode, "auth", "", "Authentication mode")
-	toolFlags.StringVar(&ntskeServerAddr, "ntskeServer", "", "NTSKE server address")
-	toolFlags.BoolVar(&skipTLSValidation, "skipTLSValidation", false, "Skip TLS certificate validation")
+	toolFlags.StringVar(&ntskeServerName, "ntske-server", "", "NTSKE server name")
+	toolFlags.BoolVar(&ntskeInsecureSkipVerify, "ntske-insecure-skip-verify", false, "Skip NTSKE verification")
 
 	benchmarkFlags.BoolVar(&verbose, "verbose", false, "Verbose logging")
 	benchmarkFlags.StringVar(&daemonAddr, "daemon", "", "Daemon address")
@@ -555,9 +558,14 @@ func main() {
 			if dispatcherMode != "" {
 				exitWithUsage()
 			}
+			if authMode != "" && authMode != authModeNTS {
+				exitWithUsage()
+			}
+			if authMode == authModeNTS && ntskeServerName == "" {
+				exitWithUsage()
+			}
 			initLogger(verbose)
-			runIPTool(&localAddr, &remoteAddr, authMode, ntskeServerAddr, skipTLSValidation)
-
+			runIPTool(&localAddr, &remoteAddr, authMode, ntskeServerName, ntskeInsecureSkipVerify)
 		}
 	case benchmarkFlags.Name():
 		err := benchmarkFlags.Parse(os.Args[2:])

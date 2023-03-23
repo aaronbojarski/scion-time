@@ -2,63 +2,73 @@ package ntske
 
 import (
 	"crypto/tls"
+	"errors"
 
 	"go.uber.org/zap"
 )
 
 type Fetcher struct {
 	TLSConfig tls.Config
-	data      Data
 	Log       *zap.Logger
+	data      Data
 }
 
-func (f *Fetcher) exchangeKeys() {
-	ke, err := ExchangeKeys(&f.TLSConfig, false, f.Log)
+func (f *Fetcher) exchangeKeys() error {
+	ke, err := exchangeKeys(&f.TLSConfig, false)
 	if err != nil {
-		f.Log.Error("NTS-KE exchange error: ", zap.Error(err))
+		return err
 	}
+	logNTSKEMetadata(f.Log, ke.Meta)
 	f.data = ke.Meta
+	return nil
 }
 
-func (f *Fetcher) GetCookieC2sKey() ([]byte, []byte) {
-	if f.GetNumberOfCookies() < 1 || f.data.C2sKey == nil {
-		f.exchangeKeys()
+func (f *Fetcher) FetchData() (data Data, err error) {
+	if !isValid(f.data) {
+		err = f.exchangeKeys()
+		if err != nil {
+			return data, err
+		}
 	}
-
-	cookie := f.data.Cookie[0]
+	data = f.data
 	f.data.Cookie = f.data.Cookie[1:]
-
-	return cookie, f.data.C2sKey
+	return data, nil
 }
 
-func (f *Fetcher) GetS2cKey() []byte {
-	if f.data.S2cKey == nil {
-		f.exchangeKeys()
+func isValid(data Data) bool {
+	if len(data.Cookie) == 0 {
+		return false
 	}
-
-	return f.data.S2cKey
+	return true
 }
 
 func (f *Fetcher) StoreCookie(cookie []byte) {
 	f.data.Cookie = append(f.data.Cookie, cookie)
 }
 
-func (f *Fetcher) GetServerIP() string {
-	if f.data.Server == "" {
-		f.exchangeKeys()
+func exchangeKeys(c *tls.Config, debug bool) (*KeyExchange, error) {
+	ke, err := Connect(c.ServerName, c, debug)
+	if err != nil {
+		return nil, err
 	}
 
-	return f.data.Server
-}
-
-func (f *Fetcher) GetServerPort() int {
-	if f.data.Port == 0 {
-		f.exchangeKeys()
+	err = ke.Exchange()
+	if err != nil {
+		return nil, err
 	}
 
-	return int(f.data.Port)
-}
+	if len(ke.Meta.Cookie) == 0 {
+		return nil, errors.New("unexpected NTS-KE meta data: no cookies")
+	}
 
-func (f *Fetcher) GetNumberOfCookies() int {
-	return len(f.data.Cookie)
+	if ke.Meta.Algo != AES_SIV_CMAC_256 {
+		return nil, errors.New("unexpected NTS-KE meta data: unknown algorithm")
+	}
+
+	err = ke.ExportKeys()
+	if err != nil {
+		return nil, err
+	}
+
+	return ke, nil
 }
