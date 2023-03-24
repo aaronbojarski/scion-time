@@ -96,7 +96,7 @@ func runIPServer(log *zap.Logger, mtrcs *ipServerMetrics, conn *net.UDPConn, ifa
 
 			cookie, err := nts.ExtractCookie(buf)
 			if err != nil {
-				log.Error("failed to extract cookie", zap.Error(err))
+				log.Info("failed to extract cookie", zap.Error(err))
 				continue
 			}
 
@@ -104,13 +104,13 @@ func runIPServer(log *zap.Logger, mtrcs *ipServerMetrics, conn *net.UDPConn, ifa
 			encryptedCookie.Decode(cookie)
 			plaintextCookie, err = encryptedCookie.Decrypt([]byte(cookiesecret), cookiekeyid)
 			if err != nil {
-				log.Error("failed to decrypt cookie", zap.Error(err))
+				log.Info("failed to decrypt cookie", zap.Error(err))
 				continue
 			}
 
 			cookies, uniqueID, err = nts.DecodePacket(&ntsreq, buf, plaintextCookie.C2S)
 			if err != nil {
-				log.Error("failed to decode packet", zap.Error(err))
+				log.Info("failed to decode packet", zap.Error(err))
 				continue
 			}
 		}
@@ -142,12 +142,12 @@ func runIPServer(log *zap.Logger, mtrcs *ipServerMetrics, conn *net.UDPConn, ifa
 			for i := 0; i < len(cookies); i++ {
 				encrypted, err := plaintextCookie.Encrypt([]byte(cookiesecret), cookiekeyid)
 				if err != nil {
-					log.Error("failed to encrypt cookie", zap.Error(err))
+					log.Info("failed to encrypt cookie", zap.Error(err))
 					continue
 				}
 				newCookie, err := encrypted.Encode()
 				if err != nil {
-					log.Error("failed to encode cookie", zap.Error(err))
+					log.Info("failed to encode cookie", zap.Error(err))
 					continue
 				}
 				cookiesResp = append(cookiesResp, newCookie)
