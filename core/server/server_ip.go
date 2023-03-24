@@ -90,7 +90,7 @@ func runIPServer(log *zap.Logger, mtrcs *ipServerMetrics, conn *net.UDPConn, ifa
 		var ntsreq nts.NTSPacket
 		var cookies [][]byte
 		var uniqueID []byte
-		var plaintextCookie PlainCookie
+		var plaintextCookie nts.PlainCookie
 		if len(buf) > 48 {
 			authenticated = true
 
@@ -100,7 +100,7 @@ func runIPServer(log *zap.Logger, mtrcs *ipServerMetrics, conn *net.UDPConn, ifa
 				continue
 			}
 
-			encryptedCookie := EncryptedCookie{}
+			encryptedCookie := nts.EncryptedCookie{}
 			encryptedCookie.Decode(cookie)
 			plaintextCookie, err = encryptedCookie.Decrypt([]byte(cookiesecret), cookiekeyid)
 			if err != nil {
