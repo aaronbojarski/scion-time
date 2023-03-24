@@ -17,6 +17,8 @@ TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
 PERFORMANCE OF THIS SOFTWARE.
 */
 
+//lint:file-ignore * maintain this file with minimal changes
+
 package ntske
 
 import (
