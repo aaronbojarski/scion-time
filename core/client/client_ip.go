@@ -113,7 +113,7 @@ func (c *IPClient) measureClockOffsetIP(ctx context.Context, log *zap.Logger, mt
 		}
 	}
 
-	buf := make([]byte, 2048)
+	buf := make([]byte, ntp.PacketLen)
 
 	reference := remoteAddr.String()
 	cTxTime0 := timebase.Now()
