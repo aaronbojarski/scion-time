@@ -85,7 +85,6 @@ func (c *IPClient) ResetInterleavedMode() {
 func (c *IPClient) measureClockOffsetIP(ctx context.Context, log *zap.Logger, mtrcs *ipClientMetrics,
 	localAddr, remoteAddr *net.UDPAddr) (
 	offset time.Duration, weight float64, err error) {
-
 	conn, err := net.ListenUDP("udp", &net.UDPAddr{IP: localAddr.IP})
 	if err != nil {
 		return offset, weight, err

@@ -28,7 +28,6 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"io"
 	"net"
 	"strconv"
 	"strings"
@@ -532,7 +531,7 @@ func (ke *KeyExchange) Read() error {
 
 		case RecCookie:
 			cookie := make([]byte, msg.BodyLen)
-			_, err := io.ReadFull(ke.reader, cookie)
+			_, err := ke.reader.Read(cookie)
 			if err != nil {
 				return errors.New("buffer overrun")
 			}
