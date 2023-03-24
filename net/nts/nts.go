@@ -67,7 +67,7 @@ func NewPacket(ntpHeader []byte, ntskeData ntske.Data) (pkt NTSPacket, uniqueid 
 	pkt.AddExt(cookie)
 
 	// Add cookie extension fields here s.t. 8 cookies are available after response.
-	var cookiePlaceholderData []byte = make([]byte, len(cookie.Cookie))
+	cookiePlaceholderData := make([]byte, len(cookie.Cookie))
 	for i := len(ntskeData.Cookie); i < NumStoredCookies; i++ {
 		var cookiePlacholder CookiePlaceholder
 		cookiePlacholder.Cookie = cookiePlaceholderData
@@ -82,7 +82,7 @@ func NewPacket(ntpHeader []byte, ntskeData ntske.Data) (pkt NTSPacket, uniqueid 
 }
 
 func EncodePacket(b *[]byte, pkt *NTSPacket) {
-	var buf *bytes.Buffer = new(bytes.Buffer)
+	buf := new(bytes.Buffer)
 	if len(pkt.NTPHeader) != ntpHeaderLen {
 		panic("unexpected NTP header")
 	}
@@ -95,7 +95,7 @@ func EncodePacket(b *[]byte, pkt *NTSPacket) {
 		}
 	}
 
-	var pktlen int = buf.Len()
+	pktlen := buf.Len()
 	if cap(*b) < pktlen {
 		*b = make([]byte, pktlen)
 	} else {
@@ -106,10 +106,10 @@ func EncodePacket(b *[]byte, pkt *NTSPacket) {
 }
 
 func DecodePacket(pkt *NTSPacket, b []byte, key []byte) (cookies [][]byte, uniqueID []byte, err error) {
-	var pos int = ntpHeaderLen // Keep track of where in the original buf we are
+	pos := ntpHeaderLen
 	msgbuf := bytes.NewReader(b[48:])
-	var authenticated bool = false
-	var unique bool = false
+	authenticated := false
+	unique := false
 	for msgbuf.Len() >= 28 {
 		var eh ExtHdr
 		err := eh.unpack(msgbuf)
@@ -413,7 +413,7 @@ type CookiePlaceholder struct {
 }
 
 func (c CookiePlaceholder) string() string {
-	return fmt.Sprintf("-- CookiePlacholder EF\n")
+	return "-- CookiePlacholder EF\n"
 }
 
 func (c CookiePlaceholder) pack(buf *bytes.Buffer) error {

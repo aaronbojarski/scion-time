@@ -18,12 +18,12 @@ func (m CookieArrayMarshaler) MarshalLogArray(enc zapcore.ArrayEncoder) error {
 	return nil
 }
 
-func logNTSKEMetadata(log *zap.Logger, meta Data) {
-	log.Debug("NTSKE Metadata",
-		zap.String("c2s", hex.EncodeToString(meta.C2sKey)),
-		zap.String("s2c", hex.EncodeToString(meta.S2cKey)),
-		zap.String("server", meta.Server),
-		zap.Uint16("port", meta.Port),
-		zap.Uint16("algo", meta.Algo),
-		zap.Array("cookies", CookieArrayMarshaler{Cookies: meta.Cookie}))
+func logData(log *zap.Logger, data Data) {
+	log.Debug("NTSKE data",
+		zap.String("c2s", hex.EncodeToString(data.C2sKey)),
+		zap.String("s2c", hex.EncodeToString(data.S2cKey)),
+		zap.String("server", data.Server),
+		zap.Uint16("port", data.Port),
+		zap.Uint16("algo", data.Algo),
+		zap.Array("cookies", CookieArrayMarshaler{Cookies: data.Cookie}))
 }
