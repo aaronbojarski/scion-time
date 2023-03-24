@@ -114,7 +114,7 @@ func (c *IPClient) measureClockOffsetIP(ctx context.Context, log *zap.Logger, mt
 		remoteAddr.IP = net.ParseIP(KEData.Server)
 	}
 
-	buf := make([]byte, ntp.PacketLen)
+	buf := make([]byte, 2048)
 
 	reference := remoteAddr.String()
 	cTxTime0 := timebase.Now()
@@ -220,7 +220,7 @@ func (c *IPClient) measureClockOffsetIP(ctx context.Context, log *zap.Logger, mt
 				return offset, weight, err
 			}
 
-			err = nts.ProcessResponse(c.Auth.NTSKEFetcher, cookies, requestID, responseID)
+			err = nts.ProcessResponse(&c.Auth.NTSKEFetcher, cookies, requestID, responseID)
 			if err != nil {
 				log.Error("failed to process response packet", zap.Error(err))
 				return offset, weight, err

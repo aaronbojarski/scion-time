@@ -154,6 +154,50 @@ func DecodePacket(pkt *NTSPacket, b []byte, key []byte) (cookies [][]byte, uniqu
 	return cookies, uniqueID, nil
 }
 
+func ExtractCookie(b []byte) (cookie []byte, err error) {
+	msgbuf := bytes.NewReader(b[48:])
+	for msgbuf.Len() >= 28 {
+		var eh ExtHdr
+		err := eh.unpack(msgbuf)
+		if err != nil {
+			return cookie, fmt.Errorf("unpack extension field: %s", err)
+		}
+
+		switch eh.Type {
+		case extUniqueIdentifier:
+			u := UniqueIdentifier{ExtHdr: eh}
+			err = u.unpack(msgbuf)
+			if err != nil {
+				return cookie, fmt.Errorf("unpack UniqueIdentifier: %s", err)
+			}
+
+		case extAuthenticator:
+			a := Authenticator{ExtHdr: eh}
+			err = a.unpack(msgbuf)
+			if err != nil {
+				return cookie, fmt.Errorf("unpack Authenticator: %s", err)
+			}
+
+		case extCookie:
+			cookieExt := Cookie{ExtHdr: eh}
+			err = cookieExt.unpack(msgbuf)
+			if err != nil {
+				return cookie, fmt.Errorf("unpack Cookie: %s", err)
+			}
+			return cookieExt.Cookie, nil
+
+		default:
+			// Unknown extension field. Skip it.
+			_, err := msgbuf.Seek(int64(eh.Length), io.SeekCurrent)
+			if err != nil {
+				return cookie, err
+			}
+		}
+	}
+
+	return cookie, errors.New("packet not does not contain a cookie")
+}
+
 func PrepareNewPacket(ntpheader []byte, KEData ntske.Data) (pkt NTSPacket, uniqueid []byte) {
 	pkt.NTPHeader = ntpheader
 	var uid UniqueIdentifier
@@ -179,7 +223,7 @@ func PrepareNewPacket(ntpheader []byte, KEData ntske.Data) (pkt NTSPacket, uniqu
 	return pkt, uid.ID
 }
 
-func ProcessResponse(NTSKEFetcher ntske.Fetcher, cookies [][]byte, reqID []byte, respID []byte) error {
+func ProcessResponse(NTSKEFetcher *ntske.Fetcher, cookies [][]byte, reqID []byte, respID []byte) error {
 	for _, cookie := range cookies {
 		NTSKEFetcher.StoreCookie(cookie)
 	}
@@ -187,6 +231,27 @@ func ProcessResponse(NTSKEFetcher ntske.Fetcher, cookies [][]byte, reqID []byte,
 		return errors.New("ID of response does not equal unique ID of request")
 	}
 	return nil
+}
+
+func PrepareNewResponsePacket(ntpheader []byte, cookies [][]byte, key []byte, uniqueid []byte) (pkt NTSPacket) {
+	pkt.NTPHeader = ntpheader
+	var uid UniqueIdentifier
+	uid.ID = uniqueid
+	pkt.AddExt(uid)
+
+	var buf *bytes.Buffer = new(bytes.Buffer)
+	for _, c := range cookies {
+		var cookie Cookie
+		cookie.Cookie = c
+		cookie.pack(buf)
+	}
+
+	var auth Authenticator
+	auth.Key = key
+	auth.AssociatedData = buf.Bytes()
+	pkt.AddExt(auth)
+
+	return pkt
 }
 
 type ExtHdr struct {
@@ -385,11 +450,12 @@ type Key []byte
 
 type Authenticator struct {
 	ExtHdr
-	NonceLen      uint16
-	CipherTextLen uint16
-	Nonce         []byte
-	CipherText    []byte
-	Key           Key
+	NonceLen       uint16
+	CipherTextLen  uint16
+	Nonce          []byte
+	AssociatedData []byte
+	CipherText     []byte
+	Key            Key
 }
 
 func (a Authenticator) string() string {
@@ -397,10 +463,12 @@ func (a Authenticator) string() string {
 		"  NonceLen: %v\n"+
 		"  CipherTextLen: %v\n"+
 		"  Nonce: %x\n"+
+		"  AssociatedData %x\n"+
 		"  Ciphertext: %x\n"+
 		"  Key: %x\n",
 		a.NonceLen,
 		a.CipherTextLen,
+		a.AssociatedData,
 		a.Nonce,
 		a.CipherText,
 		a.Key,
@@ -421,7 +489,7 @@ func (a Authenticator) pack(buf *bytes.Buffer) error {
 
 	a.Nonce = bits
 
-	a.CipherText = aessiv.Seal(nil, a.Nonce, nil, buf.Bytes())
+	a.CipherText = aessiv.Seal(nil, a.Nonce, a.AssociatedData, buf.Bytes())
 	a.CipherTextLen = uint16(len(a.CipherText))
 
 	noncebuf := new(bytes.Buffer)

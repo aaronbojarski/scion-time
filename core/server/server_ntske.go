@@ -18,6 +18,11 @@ import (
 	"example.com/scion-time/net/ntske"
 )
 
+const (
+	cookiesecret string = "12345678901234567890123456789012"
+	cookiekeyid  int    = 17
+)
+
 type PlainCookie struct {
 	Algo uint16
 	S2C  []byte
@@ -159,8 +164,6 @@ func (c *EncryptedCookie) Decode(b []byte) {
 
 func runNTSKEServer(log *zap.Logger, listener net.Listener) {
 
-	var cookiesecret string = "12345678901234567890123456789012"
-	var cookiekeyid int = 17
 	log.Info("server NTSKE listening via IP")
 
 	for {
@@ -169,7 +172,6 @@ func runNTSKEServer(log *zap.Logger, listener net.Listener) {
 			log.Error("server: accept: %s", zap.Error(err))
 			break
 		}
-		log.Info("Handling request")
 
 		err = ke.Read()
 		if err != nil {
