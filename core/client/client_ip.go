@@ -103,15 +103,15 @@ func (c *IPClient) measureClockOffsetIP(ctx context.Context, log *zap.Logger, mt
 		log.Error("failed to enable timestamping", zap.Error(err))
 	}
 
-	var KEData ntske.Data
+	var ntskeData ntske.Data
 	if c.Auth.Enabled {
-		KEData, err = c.Auth.NTSKEFetcher.FetchData()
+		ntskeData, err = c.Auth.NTSKEFetcher.FetchData()
 		if err != nil {
-			log.Error("failed to fetch key exchange data", zap.Error(err))
-			return offset, weight, err
+			log.Info("failed to fetch key exchange data. NTP request will be unauthenticated", zap.Error(err))
+		} else {
+			remoteAddr.Port = int(ntskeData.Port)
+			remoteAddr.IP = net.ParseIP(ntskeData.Server)
 		}
-		remoteAddr.Port = int(KEData.Port)
-		remoteAddr.IP = net.ParseIP(KEData.Server)
 	}
 
 	buf := make([]byte, 2048)
@@ -137,8 +137,8 @@ func (c *IPClient) measureClockOffsetIP(ctx context.Context, log *zap.Logger, mt
 
 	var requestID []byte
 	var ntsreq nts.NTSPacket
-	if c.Auth.Enabled {
-		ntsreq, requestID = nts.PrepareNewPacket(buf, KEData)
+	if c.Auth.Enabled && ntskeData.Cookie != nil {
+		ntsreq, requestID = nts.NewPacket(buf, ntskeData)
 		nts.EncodePacket(&buf, &ntsreq)
 	}
 
@@ -213,16 +213,24 @@ func (c *IPClient) measureClockOffsetIP(ctx context.Context, log *zap.Logger, mt
 		}
 
 		var ntsresp nts.NTSPacket
-		if c.Auth.Enabled {
-			cookies, responseID, err := nts.DecodePacket(&ntsresp, buf, KEData.S2cKey)
+		if c.Auth.Enabled && ntskeData.Cookie != nil {
+			cookies, responseID, err := nts.DecodePacket(&ntsresp, buf, ntskeData.S2cKey)
 			if err != nil {
-				log.Error("failed to authenticate packet", zap.Error(err))
+				if numRetries != maxNumRetries && deadlineIsSet && timebase.Now().Before(deadline) {
+					log.Info("failed to decode and authenticate NTS packet", zap.Error(err))
+					numRetries++
+					continue
+				}
 				return offset, weight, err
 			}
 
 			err = nts.ProcessResponse(&c.Auth.NTSKEFetcher, cookies, requestID, responseID)
 			if err != nil {
-				log.Error("failed to process response packet", zap.Error(err))
+				if numRetries != maxNumRetries && deadlineIsSet && timebase.Now().Before(deadline) {
+					log.Info("failed to process NTS packet response", zap.Error(err))
+					numRetries++
+					continue
+				}
 				return offset, weight, err
 			}
 		}
