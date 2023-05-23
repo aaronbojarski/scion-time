@@ -5,7 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 
-	"github.com/secure-io/siv-go"
+	"github.com/jacobsa/crypto/siv"
 )
 
 const (
@@ -128,28 +128,24 @@ func (c *ServerCookie) EncryptWithNonce(key []byte, keyid int) (EncryptedServerC
 		return EncryptedServerCookie{}, err
 	}
 
-	aessiv, err := siv.NewCMAC(key)
-	if err != nil {
-		return EncryptedServerCookie{}, err
-	}
-
 	b := c.Encode()
 
 	var ecookie EncryptedServerCookie
 	ecookie.ID = uint16(keyid)
 	ecookie.Nonce = bits
-	ecookie.Ciphertext = aessiv.Seal(nil /* dst */, ecookie.Nonce, b, nil /* additionalData */)
-
+	associated := make([][]byte, 1)
+	associated[0] = ecookie.Nonce
+	ecookie.Ciphertext, err = siv.Encrypt(nil, key, b, associated)
+	if err != nil {
+		return EncryptedServerCookie{}, err
+	}
 	return ecookie, nil
 }
 
 func (c *EncryptedServerCookie) Decrypt(key []byte) (ServerCookie, error) {
-	aessiv, err := siv.NewCMAC(key)
-	if err != nil {
-		return ServerCookie{}, err
-	}
-
-	b, err := aessiv.Open(nil /* dst */, c.Nonce, c.Ciphertext, nil /* additionalData */)
+	associated := make([][]byte, 1)
+	associated[0] = c.Nonce
+	b, err := siv.Decrypt(key, c.Ciphertext, associated)
 	if err != nil {
 		return ServerCookie{}, err
 	}
