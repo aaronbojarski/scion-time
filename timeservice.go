@@ -429,6 +429,7 @@ func runServer(configFile string) {
 	provider := ntske.NewProvider()
 
 	server.StartNTSKEServer(ctx, log, copyIP(localAddr.Host.IP), localAddr.Host.Port, tlsConfig, provider)
+	server.StartSCIONNTSKEServer(ctx, log, copyIP(localAddr.Host.IP), localAddr.Host.Port, tlsConfig, provider, udp.UDPAddrFromSnet(localAddr))
 	server.StartIPServer(ctx, log, snet.CopyUDPAddr(localAddr.Host), provider)
 	server.StartSCIONServer(ctx, log, daemonAddr, snet.CopyUDPAddr(localAddr.Host), provider)
 
@@ -460,6 +461,7 @@ func runRelay(configFile string) {
 	provider := ntske.NewProvider()
 
 	server.StartNTSKEServer(ctx, log, copyIP(localAddr.Host.IP), localAddr.Host.Port, tlsConfig, provider)
+	server.StartSCIONNTSKEServer(ctx, log, copyIP(localAddr.Host.IP), localAddr.Host.Port, tlsConfig, provider, udp.UDPAddrFromSnet(localAddr))
 	server.StartIPServer(ctx, log, snet.CopyUDPAddr(localAddr.Host), provider)
 	server.StartSCIONServer(ctx, log, daemonAddr, snet.CopyUDPAddr(localAddr.Host), provider)
 
