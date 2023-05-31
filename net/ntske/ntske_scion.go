@@ -7,7 +7,10 @@ import (
 	"errors"
 	"fmt"
 
+	"go.uber.org/zap"
+
 	"github.com/quic-go/quic-go"
+	"github.com/scionproto/scion/pkg/daemon"
 )
 
 // KeyExchange is Network Time Security Key Exchange connection
@@ -19,8 +22,23 @@ type KeyExchangeSCION struct {
 	Debug    bool
 }
 
-func NewSCIONListener(ctx context.Context, reader *bufio.Reader) *KeyExchangeSCION {
+func newDaemonConnector(log *zap.Logger, ctx context.Context, daemonAddr string) daemon.Connector {
+	if daemonAddr == "" {
+		return nil
+	}
+	s := &daemon.Service{
+		Address: daemonAddr,
+	}
+	c, err := s.Connect(ctx)
+	if err != nil {
+		log.Fatal("failed to create demon connector", zap.Error(err))
+	}
+	return c
+}
+
+func NewSCIONListener(ctx context.Context, conn quic.Connection, reader *bufio.Reader) *KeyExchangeSCION {
 	ke := new(KeyExchangeSCION)
+	ke.Conn = conn
 	ke.reader = reader
 	return ke
 }
@@ -61,11 +79,6 @@ func (ke *KeyExchangeSCION) Read() error {
 			return err
 		}
 
-		// C (Critical Bit): Determines the disposition of
-		// unrecognized Record Types. Implementations which
-		// receive a record with an unrecognized Record Type
-		// MUST ignore the record if the Critical Bit is 0 and
-		// MUST treat it as an error if the Critical Bit is 1.
 		if hasBit(msg.Type, 15) {
 			critical = true
 		} else {

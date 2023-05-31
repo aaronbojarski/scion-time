@@ -25,7 +25,7 @@ func handleSCIONKeyExchange(log *zap.Logger, conn quic.Connection, localPort int
 		}
 		defer quic.SendStream(stream).Close()
 
-		ke := ntske.NewSCIONListener(context.Background(), bufio.NewReader(stream))
+		ke := ntske.NewSCIONListener(context.Background(), conn, bufio.NewReader(stream))
 
 		err = ke.Read()
 		if err != nil {
@@ -37,7 +37,7 @@ func handleSCIONKeyExchange(log *zap.Logger, conn quic.Connection, localPort int
 			return errors.New("failed to export keys")
 		}
 
-		localIP := ke.Conn.LocalAddr().(*net.UDPAddr).IP
+		localIP := ke.Conn.LocalAddr().(udp.UDPAddr).Host.IP
 
 		var msg ntske.ExchangeMsg
 		msg.AddRecord(ntske.NextProto{
