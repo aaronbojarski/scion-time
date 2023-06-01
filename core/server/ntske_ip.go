@@ -11,18 +11,39 @@ import (
 	"example.com/scion-time/net/ntske"
 )
 
+func sendMessageWithError(log *zap.Logger, conn *tls.Conn, code int) {
+	var msg ntske.ExchangeMsg
+	msg.AddRecord(ntske.Error{
+		Code: uint16(code),
+	})
+	
+	buf, err := msg.Pack()
+	if err != nil {
+		log.Info("failed to build packet", zap.Error(err))
+		return
+	}
+
+	n, err := conn.Write(buf.Bytes())
+	if err != nil || n != buf.Len() {
+		log.Info("failed to write response", zap.Error(err))
+		return
+	}
+}
+
 func handleKeyExchange(log *zap.Logger, ke *ntske.KeyExchange, localPort int, provider *ntske.Provider) {
 	defer ke.Conn.Close()
 
 	err := ke.Read()
 	if err != nil {
 		log.Info("failed to read key exchange", zap.Error(err))
+		sendMessageWithError(log, ke.Conn, 1)
 		return
 	}
 
 	err = ke.ExportKeys()
 	if err != nil {
 		log.Info("failed to export keys", zap.Error(err))
+		sendMessageWithError(log, ke.Conn, 2)
 		return
 	}
 
@@ -63,6 +84,7 @@ func handleKeyExchange(log *zap.Logger, ke *ntske.KeyExchange, localPort int, pr
 	}
 	if !addedCookie {
 		log.Info("failed to add at least one cookie")
+		sendMessageWithError(log, ke.Conn, 2)
 		return
 	}
 
@@ -71,6 +93,7 @@ func handleKeyExchange(log *zap.Logger, ke *ntske.KeyExchange, localPort int, pr
 	buf, err := msg.Pack()
 	if err != nil {
 		log.Info("failed to build packet", zap.Error(err))
+		sendMessageWithError(log, ke.Conn, 2)
 		return
 	}
 
