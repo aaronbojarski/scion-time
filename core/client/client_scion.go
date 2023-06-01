@@ -194,9 +194,9 @@ func (c *SCIONClient) measureClockOffsetSCION(ctx context.Context, log *zap.Logg
 	ntp.EncodePacket(&buf, &ntpreq)
 
 	var requestID []byte
-	var ntsreq nts.NTSPacket
+	var ntsreq nts.Packet
 	if c.Auth.NTSEnabled {
-		ntsreq, requestID = nts.NewPacket(ntskeData)
+		ntsreq, requestID = nts.NewRequestPacket(ntskeData)
 		nts.EncodePacket(&buf, &ntsreq)
 	}
 
@@ -448,9 +448,9 @@ func (c *SCIONClient) measureClockOffsetSCION(ctx context.Context, log *zap.Logg
 		}
 
 		ntsAuthenticated := false
-		var ntsresp nts.NTSPacket
+		var ntsresp nts.Packet
 		if c.Auth.NTSEnabled {
-			err = nts.DecodePacket(&ntsresp, &udpLayer.Payload)
+			err = nts.DecodePacket(&ntsresp, udpLayer.Payload)
 			if err != nil {
 				if numRetries != maxNumRetries && deadlineIsSet && timebase.Now().Before(deadline) {
 					log.Info("failed to decode and authenticate NTS packet", zap.Error(err))
@@ -460,13 +460,7 @@ func (c *SCIONClient) measureClockOffsetSCION(ctx context.Context, log *zap.Logg
 				return offset, weight, err
 			}
 
-			err = ntsresp.Authenticate(&udpLayer.Payload, ntskeData.S2cKey)
-			if err != nil {
-				log.Info("failed to authenticate packet", zap.Error(err))
-				continue
-			}
-
-			err = nts.ProcessResponse(&c.Auth.NTSKEFetcher, &ntsresp, requestID)
+			err = nts.ProcessResponse(udpLayer.Payload, ntskeData.S2cKey, &c.Auth.NTSKEFetcher, &ntsresp, requestID)
 			if err != nil {
 				if numRetries != maxNumRetries && deadlineIsSet && timebase.Now().Before(deadline) {
 					log.Info("failed to process NTS packet", zap.Error(err))
