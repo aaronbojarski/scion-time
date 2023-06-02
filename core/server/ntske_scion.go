@@ -16,84 +16,45 @@ import (
 )
 
 func handleSCIONKeyExchange(log *zap.Logger, conn quic.Connection, localPort int, provider *ntske.Provider) error {
-
-	i := 0
-	for {
-		stream, err := conn.AcceptStream(context.Background())
-		if err != nil {
-			return err
-		}
-		defer quic.SendStream(stream).Close()
-
-		reader := bufio.NewReader(stream)
-		var data ntske.Data
-		err = ntske.Read(log, reader, &data)
-		if err != nil {
-			return errors.New("failed to read key exchange")
-		}
-
-		err = ntske.ExportKeys(conn.ConnectionState().TLS.ConnectionState, &data)
-		if err != nil {
-			return errors.New("failed to export keys")
-		}
-
-		localIP := conn.LocalAddr().(udp.UDPAddr).Host.IP
-
-		var msg ntske.ExchangeMsg
-		msg.AddRecord(ntske.NextProto{
-			NextProto: ntske.NTPv4,
-		})
-		msg.AddRecord(ntske.Algorithm{
-			Algo: []uint16{ntske.AES_SIV_CMAC_256},
-		})
-		msg.AddRecord(ntske.Server{
-			Addr: []byte(localIP.String()),
-		})
-		msg.AddRecord(ntske.Port{
-			Port: uint16(localPort),
-		})
-
-		var plaintextCookie ntske.ServerCookie
-		plaintextCookie.Algo = ntske.AES_SIV_CMAC_256
-		plaintextCookie.C2S = data.C2sKey
-		plaintextCookie.S2C = data.S2cKey
-		key := provider.Current()
-		addedCookie := false
-		for i := 0; i < 8; i++ {
-			encryptedCookie, err := plaintextCookie.EncryptWithNonce(key.Value, key.ID)
-			if err != nil {
-				log.Info("failed to encrypt cookie", zap.Error(err))
-				continue
-			}
-
-			b := encryptedCookie.Encode()
-			msg.AddRecord(ntske.Cookie{
-				Cookie: b,
-			})
-			addedCookie = true
-		}
-		if !addedCookie {
-			return errors.New("failed to add at least one cookie")
-		}
-
-		msg.AddRecord(ntske.End{})
-
-		buf, err := msg.Pack()
-		if err != nil {
-			return errors.New("failed to build packet")
-		}
-
-		_, err = stream.Write(buf.Bytes())
-		if err != nil {
-			return err
-		}
-
-		quic.SendStream(stream).Close()
-		i++
-
-		log.Info("STREAM WRITTEN")
-		return nil
+	stream, err := conn.AcceptStream(context.Background())
+	if err != nil {
+		return err
 	}
+	defer quic.SendStream(stream).Close()
+
+	reader := bufio.NewReader(stream)
+	var data ntske.Data
+	err = ntske.Read(log, reader, &data)
+	if err != nil {
+		return errors.New("failed to read key exchange")
+	}
+
+	err = ntske.ExportKeys(conn.ConnectionState().TLS.ConnectionState, &data)
+	if err != nil {
+		return errors.New("failed to export keys")
+	}
+
+	localIP := conn.LocalAddr().(udp.UDPAddr).Host.IP
+
+	msg, err := createMessage(log, localIP, localPort, &data, provider)
+	if err != nil {
+		log.Info("failed to create packet", zap.Error(err))
+		return err
+	}
+
+	buf, err := msg.Pack()
+	if err != nil {
+		return errors.New("failed to build packet")
+	}
+
+	_, err = stream.Write(buf.Bytes())
+	if err != nil {
+		return err
+	}
+
+	quic.SendStream(stream).Close()
+
+	return nil
 }
 
 func runSCIONNTSKEServer(ctx context.Context, log *zap.Logger, listener quic.Listener, localPort int, provider *ntske.Provider) {
@@ -133,5 +94,4 @@ func StartSCIONNTSKEServer(ctx context.Context, log *zap.Logger, localIP net.IP,
 	}
 
 	go runSCIONNTSKEServer(ctx, log, listener, localPort, provider)
-
 }

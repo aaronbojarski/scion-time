@@ -5,18 +5,16 @@ import (
 	"context"
 	"crypto/tls"
 
-	"example.com/scion-time/net/scion"
-	"example.com/scion-time/net/udp"
+	"github.com/quic-go/quic-go"
 	"go.uber.org/zap"
 
-	"github.com/quic-go/quic-go"
 	"github.com/scionproto/scion/pkg/daemon"
+
+	"example.com/scion-time/net/scion"
+	"example.com/scion-time/net/udp"
 )
 
 func newDaemonConnector(log *zap.Logger, ctx context.Context, daemonAddr string) daemon.Connector {
-	if daemonAddr == "" {
-		return nil
-	}
 	s := &daemon.Service{
 		Address: daemonAddr,
 	}
