@@ -3,24 +3,15 @@ package ntske
 import (
 	"bufio"
 	"context"
-	"encoding/binary"
-	"errors"
-	"fmt"
+	"crypto/tls"
 
+	"example.com/scion-time/net/scion"
+	"example.com/scion-time/net/udp"
 	"go.uber.org/zap"
 
 	"github.com/quic-go/quic-go"
 	"github.com/scionproto/scion/pkg/daemon"
 )
-
-// KeyExchange is Network Time Security Key Exchange connection
-type KeyExchangeSCION struct {
-	hostport string
-	Conn     quic.Connection
-	reader   *bufio.Reader
-	Meta     Data
-	Debug    bool
-}
 
 func newDaemonConnector(log *zap.Logger, ctx context.Context, daemonAddr string) daemon.Connector {
 	if daemonAddr == "" {
@@ -36,131 +27,81 @@ func newDaemonConnector(log *zap.Logger, ctx context.Context, daemonAddr string)
 	return c
 }
 
-func NewSCIONListener(ctx context.Context, conn quic.Connection, reader *bufio.Reader) *KeyExchangeSCION {
-	ke := new(KeyExchangeSCION)
-	ke.Conn = conn
-	ke.reader = reader
-	return ke
+func NewQUICListener(ctx context.Context, listener quic.Listener) (quic.Connection, error) {
+	conn, err := listener.Accept(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return conn, nil
 }
 
-// ExportKeys exports two extra sessions keys from the already
-// established NTS-KE connection for use with NTS.
-func (ke *KeyExchangeSCION) ExportKeys() error {
-	label := "EXPORTER-network-time-security"
-	s2cContext := []byte{0x00, 0x00, 0x00, 0x0f, 0x01}
-	c2sContext := []byte{0x00, 0x00, 0x00, 0x0f, 0x00}
-	len := 32
+func ConnectQUIC(log *zap.Logger, localAddr, remoteAddr udp.UDPAddr, daemonAddr string, config *tls.Config) (*scion.QUICConnection, Data, error) {
+	config.NextProtos = []string{alpn}
 
-	var err error
-	cs := ke.Conn.ConnectionState().TLS.ConnectionState
-	ke.Meta.S2cKey, err = cs.ExportKeyingMaterial(label, s2cContext, len)
+	ctx := context.Background()
+
+	dc := newDaemonConnector(log, ctx, daemonAddr)
+	ps, err := dc.Paths(ctx, remoteAddr.IA, localAddr.IA, daemon.PathReqFlags{Refresh: true})
+	if err != nil {
+		log.Fatal("failed to lookup paths", zap.Stringer("to", remoteAddr.IA), zap.Error(err))
+	}
+	if len(ps) == 0 {
+		log.Fatal("no paths available", zap.Stringer("to", remoteAddr.IA))
+	}
+	log.Debug("available paths", zap.Stringer("to", remoteAddr.IA), zap.Array("via", scion.PathArrayMarshaler{Paths: ps}))
+	sp := ps[0]
+	log.Debug("selected path", zap.Stringer("to", remoteAddr.IA), zap.Object("via", scion.PathMarshaler{Path: sp}))
+
+	conn, err := scion.DialQUIC(ctx, localAddr, remoteAddr, sp,
+		"" /* host*/, config, nil /* quicCfg */)
+	if err != nil {
+		return nil, Data{}, err
+	}
+
+	//state := conn.ConnectionState().TLS.ConnectionState
+	//if state.NegotiatedProtocol != alpn {
+	//	return nil, Data{}, fmt.Errorf("server not speaking ntske/1")
+	//}
+
+	return conn, Data{}, nil
+}
+
+func ExchangeQUIC(log *zap.Logger, conn *scion.QUICConnection, data *Data) error {
+	stream, err := conn.OpenStream()
+	if err != nil {
+		return err
+	}
+	defer quic.SendStream(stream).Close()
+
+	var msg ExchangeMsg
+	var nextproto NextProto
+
+	nextproto.NextProto = NTPv4
+	msg.AddRecord(nextproto)
+
+	var algo Algorithm
+	algo.Algo = []uint16{AES_SIV_CMAC_256}
+	msg.AddRecord(algo)
+
+	var end End
+	msg.AddRecord(end)
+
+	buf, err := msg.Pack()
 	if err != nil {
 		return err
 	}
 
-	ke.Meta.C2sKey, err = cs.ExportKeyingMaterial(label, c2sContext, len)
+	_, err = stream.Write(buf.Bytes())
 	if err != nil {
 		return err
 	}
+	quic.SendStream(stream).Close()
+	reader := bufio.NewReader(stream)
 
+	// Wait for response
+	err = Read(log, reader, data)
+	if err != nil {
+		return err
+	}
 	return nil
-}
-
-// Read reads incoming NTS-KE messages until an End of Message record
-// is received or an error occur. It fills out the ke.Meta structure
-// with negotiated data.
-func (ke *KeyExchangeSCION) Read() error {
-	var msg RecordHdr
-	var critical bool
-
-	for {
-		err := binary.Read(ke.reader, binary.BigEndian, &msg)
-		if err != nil {
-			return err
-		}
-
-		if hasBit(msg.Type, 15) {
-			critical = true
-		} else {
-			critical = false
-		}
-
-		// Get rid of Critical bit.
-		msg.Type &^= (1 << 15)
-
-		if ke.Debug {
-			fmt.Printf("Record type %v\n", msg.Type)
-			if critical {
-				fmt.Printf("Critical set\n")
-			}
-		}
-
-		switch msg.Type {
-		case RecEom:
-			// Check that we have complete data.
-			// if len(ke.Meta.Cookie) == 0 || ke.Meta.Algo == 0 {
-			// 	return errors.New("incomplete data")
-			// }
-
-			return nil
-
-		case RecNextproto:
-			var nextProto uint16
-			err := binary.Read(ke.reader, binary.BigEndian, &nextProto)
-			if err != nil {
-				return errors.New("buffer overrun")
-			}
-
-		case RecAead:
-			var aead uint16
-			err := binary.Read(ke.reader, binary.BigEndian, &aead)
-			if err != nil {
-				return errors.New("buffer overrun")
-			}
-
-			ke.Meta.Algo = aead
-
-		case RecCookie:
-			cookie := make([]byte, msg.BodyLen)
-			_, err := ke.reader.Read(cookie)
-			if err != nil {
-				return errors.New("buffer overrun")
-			}
-
-			ke.Meta.Cookie = append(ke.Meta.Cookie, cookie)
-
-		case RecServer:
-			address := make([]byte, msg.BodyLen)
-
-			err := binary.Read(ke.reader, binary.BigEndian, &address)
-			if err != nil {
-				return errors.New("buffer overrun")
-			}
-			ke.Meta.Server = string(address)
-			if ke.Debug {
-				fmt.Printf("(got negotiated NTP server: %v)\n", ke.Meta.Server)
-			}
-
-		case RecPort:
-			err := binary.Read(ke.reader, binary.BigEndian, &ke.Meta.Port)
-			if err != nil {
-				return errors.New("buffer overrun")
-			}
-			if ke.Debug {
-				fmt.Printf("(got negotiated NTP port: %v)\n", ke.Meta.Port)
-			}
-
-		default:
-			if critical {
-				return fmt.Errorf("unknown record type %v with critical bit set", msg.Type)
-			}
-
-			// Swallow unknown record.
-			unknownMsg := make([]byte, msg.BodyLen)
-			err := binary.Read(ke.reader, binary.BigEndian, &unknownMsg)
-			if err != nil {
-				return errors.New("buffer overrun")
-			}
-		}
-	}
 }

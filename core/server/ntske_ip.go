@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bufio"
 	"context"
 	"crypto/tls"
 	"net"
@@ -16,7 +17,7 @@ func sendMessageWithError(log *zap.Logger, conn *tls.Conn, code int) {
 	msg.AddRecord(ntske.Error{
 		Code: uint16(code),
 	})
-	
+
 	buf, err := msg.Pack()
 	if err != nil {
 		log.Info("failed to build packet", zap.Error(err))
@@ -30,24 +31,27 @@ func sendMessageWithError(log *zap.Logger, conn *tls.Conn, code int) {
 	}
 }
 
-func handleKeyExchange(log *zap.Logger, ke *ntske.KeyExchange, localPort int, provider *ntske.Provider) {
-	defer ke.Conn.Close()
+func handleKeyExchange(log *zap.Logger, conn *tls.Conn, localPort int, provider *ntske.Provider) {
+	defer conn.Close()
 
-	err := ke.Read()
+	var err error
+	var data ntske.Data
+	reader := bufio.NewReader(conn)
+	err = ntske.Read(log, reader, &data)
 	if err != nil {
 		log.Info("failed to read key exchange", zap.Error(err))
-		sendMessageWithError(log, ke.Conn, 1)
+		sendMessageWithError(log, conn, 1)
 		return
 	}
 
-	err = ke.ExportKeys()
+	err = ntske.ExportKeys(conn.ConnectionState(), &data)
 	if err != nil {
 		log.Info("failed to export keys", zap.Error(err))
-		sendMessageWithError(log, ke.Conn, 2)
+		sendMessageWithError(log, conn, 2)
 		return
 	}
 
-	localIP := ke.Conn.LocalAddr().(*net.TCPAddr).IP
+	localIP := conn.LocalAddr().(*net.TCPAddr).IP
 
 	var msg ntske.ExchangeMsg
 	msg.AddRecord(ntske.NextProto{
@@ -65,8 +69,8 @@ func handleKeyExchange(log *zap.Logger, ke *ntske.KeyExchange, localPort int, pr
 
 	var plaintextCookie ntske.ServerCookie
 	plaintextCookie.Algo = ntske.AES_SIV_CMAC_256
-	plaintextCookie.C2S = ke.Meta.C2sKey
-	plaintextCookie.S2C = ke.Meta.S2cKey
+	plaintextCookie.C2S = data.C2sKey
+	plaintextCookie.S2C = data.S2cKey
 	key := provider.Current()
 	addedCookie := false
 	for i := 0; i < 8; i++ {
@@ -84,7 +88,7 @@ func handleKeyExchange(log *zap.Logger, ke *ntske.KeyExchange, localPort int, pr
 	}
 	if !addedCookie {
 		log.Info("failed to add at least one cookie")
-		sendMessageWithError(log, ke.Conn, 2)
+		sendMessageWithError(log, conn, 2)
 		return
 	}
 
@@ -93,11 +97,11 @@ func handleKeyExchange(log *zap.Logger, ke *ntske.KeyExchange, localPort int, pr
 	buf, err := msg.Pack()
 	if err != nil {
 		log.Info("failed to build packet", zap.Error(err))
-		sendMessageWithError(log, ke.Conn, 2)
+		sendMessageWithError(log, conn, 2)
 		return
 	}
 
-	n, err := ke.Conn.Write(buf.Bytes())
+	n, err := conn.Write(buf.Bytes())
 	if err != nil || n != buf.Len() {
 		log.Info("failed to write response", zap.Error(err))
 		return
@@ -106,12 +110,12 @@ func handleKeyExchange(log *zap.Logger, ke *ntske.KeyExchange, localPort int, pr
 
 func runNTSKEServer(log *zap.Logger, listener net.Listener, localPort int, provider *ntske.Provider) {
 	for {
-		ke, err := ntske.NewListener(listener)
+		conn, err := ntske.NewTCPListener(listener)
 		if err != nil {
 			log.Info("failed to accept client", zap.Error(err))
 			continue
 		}
-		go handleKeyExchange(log, ke, localPort, provider)
+		go handleKeyExchange(log, conn, localPort, provider)
 	}
 }
 

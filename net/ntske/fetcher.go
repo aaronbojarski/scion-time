@@ -1,8 +1,6 @@
 package ntske
 
 import (
-	"bufio"
-	"context"
 	"crypto/tls"
 	"errors"
 	"log"
@@ -11,9 +9,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/quic-go/quic-go"
-	"github.com/scionproto/scion/pkg/daemon"
 
-	"example.com/scion-time/net/scion"
 	"example.com/scion-time/net/udp"
 )
 
@@ -32,22 +28,7 @@ type Fetcher struct {
 
 func (f *Fetcher) exchangeKeys() error {
 	if f.SCIONQuic.Enabled {
-		ctx := context.Background()
-
-		dc := newDaemonConnector(f.Log, ctx, f.SCIONQuic.DaemonAddr)
-		ps, err := dc.Paths(ctx, f.SCIONQuic.RemoteAddr.IA, f.SCIONQuic.LocalAddr.IA, daemon.PathReqFlags{Refresh: true})
-		if err != nil {
-			f.Log.Fatal("failed to lookup paths", zap.Stringer("to", f.SCIONQuic.RemoteAddr.IA), zap.Error(err))
-		}
-		if len(ps) == 0 {
-			f.Log.Fatal("no paths available", zap.Stringer("to", f.SCIONQuic.RemoteAddr.IA))
-		}
-		f.Log.Debug("available paths", zap.Stringer("to", f.SCIONQuic.RemoteAddr.IA), zap.Array("via", scion.PathArrayMarshaler{Paths: ps}))
-		sp := ps[0]
-		f.Log.Debug("selected path", zap.Stringer("to", f.SCIONQuic.RemoteAddr.IA), zap.Object("via", scion.PathMarshaler{Path: sp}))
-
-		conn, err := scion.DialQUIC(ctx, f.SCIONQuic.LocalAddr, f.SCIONQuic.RemoteAddr, sp,
-			"" /* host*/, &f.TLSConfig, nil /* quicCfg */)
+		conn, _, err := ConnectQUIC(f.Log, f.SCIONQuic.LocalAddr, f.SCIONQuic.RemoteAddr, f.SCIONQuic.DaemonAddr, &f.TLSConfig)
 		if err != nil {
 			return err
 		}
@@ -58,80 +39,45 @@ func (f *Fetcher) exchangeKeys() error {
 			}
 		}()
 
-		for i := 0; i < 3; i++ {
-			stream, err := conn.OpenStream()
-			if err != nil {
-				return err
-			}
-			defer quic.SendStream(stream).Close()
+		err = ExchangeQUIC(f.Log, conn, &f.data)
+		if err != nil {
+			return err
+		}
 
-			kes := new(KeyExchangeSCION)
+		err = ExportKeys(conn.ConnectionState().TLS.ConnectionState, &f.data)
+		if err != nil {
+			return err
+		}
 
-			var msg ExchangeMsg
-			var nextproto NextProto
+	} else {
 
-			nextproto.NextProto = NTPv4
-			msg.AddRecord(nextproto)
+		var err error
+		var conn *tls.Conn
+		serverAddr := net.JoinHostPort(f.TLSConfig.ServerName, f.Port)
+		conn, f.data, err = ConnectTCP(serverAddr, &f.TLSConfig)
+		if err != nil {
+			return err
+		}
 
-			var algo Algorithm
-			algo.Algo = []uint16{AES_SIV_CMAC_256}
-			msg.AddRecord(algo)
+		err = ExchangeTCP(f.Log, conn, &f.data)
+		if err != nil {
+			return err
+		}
 
-			var end End
-			msg.AddRecord(end)
+		if len(f.data.Cookie) == 0 {
+			return errors.New("unexpected NTS-KE meta data: no cookies")
+		}
+		if f.data.Algo != AES_SIV_CMAC_256 {
+			return errors.New("unexpected NTS-KE meta data: unknown algorithm")
+		}
 
-			buf, err := msg.Pack()
-			if err != nil {
-				return err
-			}
-
-			_, err = stream.Write(buf.Bytes())
-			if err != nil {
-				return err
-			}
-			quic.SendStream(stream).Close()
-			kes.reader = bufio.NewReader(stream)
-
-			// Wait for response
-			err = kes.Read()
-			if err != nil {
-				return err
-			}
-			kes.Conn = conn.Connection
-			kes.ExportKeys()
-
-			logData(f.Log, kes.Meta)
-			f.data = kes.Meta
-
-			return nil
+		err = ExportKeys(conn.ConnectionState(), &f.data)
+		if err != nil {
+			return err
 		}
 	}
 
-	serverAddr := net.JoinHostPort(f.TLSConfig.ServerName, f.Port)
-	ke, err := Connect(serverAddr, &f.TLSConfig, false /* debug */)
-	if err != nil {
-		return err
-	}
-
-	err = ke.Exchange()
-	if err != nil {
-		return err
-	}
-
-	if len(ke.Meta.Cookie) == 0 {
-		return errors.New("unexpected NTS-KE meta data: no cookies")
-	}
-	if ke.Meta.Algo != AES_SIV_CMAC_256 {
-		return errors.New("unexpected NTS-KE meta data: unknown algorithm")
-	}
-
-	err = ke.ExportKeys()
-	if err != nil {
-		return err
-	}
-
-	logData(f.Log, ke.Meta)
-	f.data = ke.Meta
+	logData(f.Log, f.data)
 	return nil
 }
 

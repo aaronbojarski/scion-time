@@ -25,19 +25,19 @@ func handleSCIONKeyExchange(log *zap.Logger, conn quic.Connection, localPort int
 		}
 		defer quic.SendStream(stream).Close()
 
-		ke := ntske.NewSCIONListener(context.Background(), conn, bufio.NewReader(stream))
-
-		err = ke.Read()
+		reader := bufio.NewReader(stream)
+		var data ntske.Data
+		err = ntske.Read(log, reader, &data)
 		if err != nil {
 			return errors.New("failed to read key exchange")
 		}
 
-		err = ke.ExportKeys()
+		err = ntske.ExportKeys(conn.ConnectionState().TLS.ConnectionState, &data)
 		if err != nil {
 			return errors.New("failed to export keys")
 		}
 
-		localIP := ke.Conn.LocalAddr().(udp.UDPAddr).Host.IP
+		localIP := conn.LocalAddr().(udp.UDPAddr).Host.IP
 
 		var msg ntske.ExchangeMsg
 		msg.AddRecord(ntske.NextProto{
@@ -55,8 +55,8 @@ func handleSCIONKeyExchange(log *zap.Logger, conn quic.Connection, localPort int
 
 		var plaintextCookie ntske.ServerCookie
 		plaintextCookie.Algo = ntske.AES_SIV_CMAC_256
-		plaintextCookie.C2S = ke.Meta.C2sKey
-		plaintextCookie.S2C = ke.Meta.S2cKey
+		plaintextCookie.C2S = data.C2sKey
+		plaintextCookie.S2C = data.S2cKey
 		key := provider.Current()
 		addedCookie := false
 		for i := 0; i < 8; i++ {
@@ -99,12 +99,12 @@ func handleSCIONKeyExchange(log *zap.Logger, conn quic.Connection, localPort int
 func runSCIONNTSKEServer(ctx context.Context, log *zap.Logger, listener quic.Listener, localPort int, provider *ntske.Provider) {
 	defer listener.Close()
 	for {
-		conn, err := listener.Accept(ctx)
+		conn, err := ntske.NewQUICListener(context.Background(), listener)
 		if err != nil {
 			log.Info("failed to accept connection", zap.Error(err))
 			continue
 		}
-		log.Info("accepted connection", zap.Stringer("remote", conn.RemoteAddr()))
+
 		go func() {
 			err := handleSCIONKeyExchange(log, conn, localPort, provider)
 			var errApplication *quic.ApplicationError
