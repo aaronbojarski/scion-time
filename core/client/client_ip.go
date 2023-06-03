@@ -233,7 +233,7 @@ func (c *IPClient) measureClockOffsetIP(ctx context.Context, log *zap.Logger, mt
 			err = nts.DecodePacket(&ntsresp, buf)
 			if err != nil {
 				if numRetries != maxNumRetries && deadlineIsSet && timebase.Now().Before(deadline) {
-					log.Info("failed to decode and authenticate NTS packet", zap.Error(err))
+					log.Info("failed to decode NTS packet", zap.Error(err))
 					numRetries++
 					continue
 				}

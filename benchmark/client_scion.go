@@ -35,7 +35,6 @@ func newDaemonConnector(ctx context.Context, log *zap.Logger, daemonAddr string)
 }
 
 func RunSCIONBenchmark(daemonAddr string, localAddr, remoteAddr *snet.UDPAddr, authModes []string, ntskeServer string, log *zap.Logger) {
-
 	// const numClientGoroutine = 8
 	// const numRequestPerClient = 10000
 	const numClientGoroutine = 1

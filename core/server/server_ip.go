@@ -99,7 +99,7 @@ func runIPServer(log *zap.Logger, mtrcs *ipServerMetrics, conn *net.UDPConn, ifa
 		if len(buf) > ntp.PacketLen {
 			err = nts.DecodePacket(&ntsreq, buf)
 			if err != nil {
-				log.Info("failed to decode packet", zap.Error(err))
+				log.Info("failed to decode NTS packet", zap.Error(err))
 				continue
 			}
 
@@ -130,7 +130,7 @@ func runIPServer(log *zap.Logger, mtrcs *ipServerMetrics, conn *net.UDPConn, ifa
 
 			err = nts.ProcessRequest(buf, serverCookie.C2S, &ntsreq)
 			if err != nil {
-				log.Info("failed to authenticate packet", zap.Error(err))
+				log.Info("failed to process NTS packet", zap.Error(err))
 				continue
 			}
 			authenticated = true

@@ -51,12 +51,12 @@ const (
 )
 
 var (
-	unexpectedExtHdrType = errors.New("expected extension header type")
-	noCookies            = errors.New("packet does not contain cookies")
-	noAuthenticator      = errors.New("packet does not contain an authenticator")
-	noUniqueID           = errors.New("packet does not contain a unique identifier")
-	unexpectedResponseID = errors.New("unexpected response ID")
-	shortUniqueID        = errors.New("UniqueIdentifier.ID < 32 bytes")
+	errNoAuthenticator      = errors.New("packet does not contain an authenticator")
+	errNoCookies            = errors.New("packet does not contain cookies")
+	errNoUniqueID           = errors.New("packet does not contain a unique identifier")
+	errShortUniqueID        = errors.New("UniqueIdentifier.ID < 32 bytes")
+	errUnexpectedExtHdrType = errors.New("unexpected extension header type")
+	errUnexpectedResponseID = errors.New("unexpected response ID")
 )
 
 type Packet struct {
@@ -134,10 +134,10 @@ func EncodePacket(b *[]byte, pkt *Packet) {
 
 func DecodePacket(pkt *Packet, b []byte) (err error) {
 	pos := ntpPacketLen
-	authenticated := false
-	unique := false
+	foundUniqueID := false
+	foundAuthenticator := false
 
-	for len(b)-pos >= 28 {
+	for len(b)-pos >= 28 && !foundAuthenticator {
 		var eh extHdr
 		eh.unpack(b, pos)
 		pos += 4
@@ -150,7 +150,7 @@ func DecodePacket(pkt *Packet, b []byte) (err error) {
 				return err
 			}
 			pkt.UniqueID = u
-			unique = true
+			foundUniqueID = true
 
 		case extAuthenticator:
 			a := Authenticator{extHdr: eh}
@@ -160,8 +160,7 @@ func DecodePacket(pkt *Packet, b []byte) (err error) {
 			}
 			a.pos = pos - 4
 			pkt.Auth = a
-			authenticated = true
-			break
+			foundAuthenticator = true
 
 		case extCookie:
 			cookie := Cookie{extHdr: eh}
@@ -180,18 +179,17 @@ func DecodePacket(pkt *Packet, b []byte) (err error) {
 			pkt.CookiePlaceholders = append(pkt.CookiePlaceholders, cookie)
 
 		default:
-			// unknown extension field
-			// do nothing
+			// skip extension field
 		}
 
 		pos += int(eh.Length) - 4
 	}
 
-	if !authenticated {
-		return noAuthenticator
+	if !foundUniqueID {
+		return errNoUniqueID
 	}
-	if !unique {
-		return noUniqueID
+	if !foundAuthenticator {
+		return errNoAuthenticator
 	}
 
 	return nil
@@ -200,7 +198,7 @@ func DecodePacket(pkt *Packet, b []byte) (err error) {
 func (pkt *Packet) GetFirstCookie() ([]byte, error) {
 	var cookie []byte
 	if pkt.Cookies == nil || len(pkt.Cookies) < 1 {
-		return cookie, noCookies
+		return cookie, errNoCookies
 	}
 	cookie = pkt.Cookies[0].Cookie
 	return cookie, nil
@@ -240,7 +238,7 @@ func (pkt *Packet) authenticate(b []byte, key []byte) error {
 
 func ProcessResponse(b []byte, key []byte, ntskeFetcher *ntske.Fetcher, pkt *Packet, reqID []byte) error {
 	if !bytes.Equal(reqID, pkt.UniqueID.ID) {
-		return unexpectedResponseID
+		return errUnexpectedResponseID
 	}
 
 	err := pkt.authenticate(b, key)
@@ -311,7 +309,7 @@ type UniqueIdentifier struct {
 
 func (u UniqueIdentifier) pack(buf []byte, pos int) (int, error) {
 	if len(u.ID) < 32 {
-		return 0, shortUniqueID
+		return 0, errShortUniqueID
 	}
 
 	newlen := (len(u.ID) + 3) & ^3
@@ -331,7 +329,7 @@ func (u UniqueIdentifier) pack(buf []byte, pos int) (int, error) {
 
 func (u *UniqueIdentifier) unpack(buf []byte, pos int) error {
 	if u.extHdr.Type != extUniqueIdentifier {
-		return unexpectedExtHdrType
+		return errUnexpectedExtHdrType
 	}
 	valueLen := u.extHdr.Length - 4
 	id := make([]byte, valueLen)
@@ -374,7 +372,7 @@ func (c Cookie) pack(buf []byte, pos int) (int, error) {
 
 func (c *Cookie) unpack(buf []byte, pos int) error {
 	if c.extHdr.Type != extCookie {
-		return unexpectedExtHdrType
+		return errUnexpectedExtHdrType
 	}
 	valueLen := c.extHdr.Length - 4
 	cookie := make([]byte, valueLen)
@@ -407,7 +405,7 @@ func (c CookiePlaceholder) pack(buf []byte, pos int) (int, error) {
 
 func (c *CookiePlaceholder) unpack(buf []byte, pos int) error {
 	if c.extHdr.Type != extCookiePlaceholder {
-		return unexpectedExtHdrType
+		return errUnexpectedExtHdrType
 	}
 	return nil
 }
@@ -466,7 +464,7 @@ func (a Authenticator) pack(buf []byte, pos int) (int, error) {
 
 func (a *Authenticator) unpack(buf []byte, pos int) error {
 	if a.extHdr.Type != extAuthenticator {
-		return unexpectedExtHdrType
+		return errUnexpectedExtHdrType
 	}
 
 	nonceLen := binary.BigEndian.Uint16(buf[pos:])
